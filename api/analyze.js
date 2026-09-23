@@ -3,19 +3,28 @@ export default async function handler(req, res) {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'Teks kosong' });
 
-  const prompt = `Kamu adalah analis kredit bank profesional. Baca teks dokumen Memorandum Analisa Bisnis (MAB) berikut, lalu ekstrak informasinya ke JSON PERSIS seperti skema ini (jangan tambah teks lain di luar JSON):
+  const prompt = `Kamu adalah analis kredit bank profesional. Baca dokumen Memorandum Analisa Bisnis (MAB) di bawah, ekstrak ke JSON sesuai skema berikut.
 
+Untuk data yang TIDAK ADA di dokumen (terutama alamat kantor supplier/buyer/debitur), gunakan Google Search untuk mencari informasi publik resmi perusahaan tersebut (situs resmi, direktori bisnis). Tandai field "sumber_data" dengan "Dokumen" jika dari teks dokumen, atau "Internet - perlu verifikasi" jika hasil pencarian.
+
+Skema JSON (isi "" jika benar-benar tidak ditemukan dari dokumen maupun internet):
 {
-  "cif": "", "nama_debitur": "", "regional_office": "", "cbc_office": "", "total_plafon_juta": "",
-  "management": [{"nama": "", "jabatan": ""}],
-  "supplier": [{"nama_perusahaan": "", "alamat": ""}],
-  "buyer": [{"nama_perusahaan": "", "alamat": ""}],
-  "fasilitas_kredit": [{"jenis_fasilitas": "", "status_pinjaman": "", "tenor_bulan": "", "plafon_juta": "", "suku_bunga_persen": "", "biaya_provisi_juta": "", "biaya_administrasi_juta": "", "servicing_fee": ""}],
-  "bisnis": {"deskripsi": "", "model_bisnis": ""},
-  "jenis_kredit_diajukan": "", "kegunaan_kredit": "", "jangka_waktu_kredit": "", "analisa_ai": ""
+  "identitas_debitur": {"nama_debitur":"","cif":"","npwp":"","alamat_kantor_pusat":"","bentuk_badan_usaha":"","nib":""},
+  "regional_office":"", "total_plafon_juta":"",
+  "management": [{"nama":"","jabatan":""}],
+  "supplier": [{"nama_perusahaan":"","alamat":"","sumber_data":""}],
+  "buyer": [{"nama_perusahaan":"","alamat":"","sumber_data":""}],
+  "fasilitas_kredit": [{"jenis_fasilitas":"","status_pinjaman":"","tenor_bulan":"","plafon_juta":"","suku_bunga_persen":"","biaya_provisi_juta":"","biaya_administrasi_juta":"","servicing_fee":""}],
+  "bisnis": {"deskripsi":"","model_bisnis":""},
+  "jenis_kredit_diajukan":"", "kegunaan_kredit":"", "jangka_waktu_kredit":"",
+  "agunan": [{"jenis":"","nilai_juta":"","lokasi":""}],
+  "analisa_keuangan": {"omzet_juta":"","laba_bersih_juta":"","der":""},
+  "risiko_dan_legalitas": {"legalitas_status":"","group_afiliasi":"","red_flags":""},
+  "rekomendasi_analis": "",
+  "analisa_ai": ""
 }
 
-Aturan: kalau info tidak ditemukan isi "". "management" mencakup semua Direktur/Komisaris/UBO. "analisa_ai" isi catatan singkat 2-4 kalimat (kewajaran plafon vs skala bisnis, red flag jika ada). Balas HANYA JSON valid, tanpa markdown.
+Aturan: "management" = semua Direktur/Komisaris/UBO. "red_flags" isi kejanggalan (plafon vs skala usaha, legalitas kurang, dll) atau "Tidak ada" jika wajar. "rekomendasi_analis" = rekomendasi awal 1-2 kalimat, sebutkan ini masih perlu review manusia. "analisa_ai" = catatan umum 2-3 kalimat. Balas HANYA dengan JSON valid, tanpa markdown code fence, tanpa teks lain.
 
 Dokumen:
 """
@@ -31,13 +40,15 @@ ${text}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' }
+          tools: [{ google_search: {} }]
         })
       }
     );
     const data = await response.json();
-    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!raw) return res.status(200).json({ error: 'Gemini error: ' + JSON.stringify(data) });
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    let raw = parts.map(p => p.text || '').join('').trim();
+    if (!raw) return res.status(200).json({ error: 'Gemini error: ' + JSON.stringify(data).slice(0,500) });
+    raw = raw.replace(/^```json\s*/i, '').replace(/```$/,'').trim();
     let parsed;
     try { parsed = JSON.parse(raw); } catch(e) {
       return res.status(200).json({ error: 'Gagal parse JSON: ' + raw.slice(0,300) });
