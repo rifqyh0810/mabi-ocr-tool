@@ -39,6 +39,7 @@ button.green{background:var(--ok)}
 </div>
 
 <script>
+<script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const fileInput = document.getElementById('fileInput');
 const processBtn = document.getElementById('processBtn');
@@ -48,6 +49,7 @@ const fileList = document.getElementById('fileList');
 const downloadCard = document.getElementById('downloadCard');
 const downloadBtn = document.getElementById('downloadBtn');
 let allResults = [];
+let ocrWorker = null;
 
 processBtn.addEventListener('click', async () => {
   const files = Array.from(fileInput.files);
@@ -63,12 +65,16 @@ processBtn.addEventListener('click', async () => {
     row.innerHTML = `<span>${f.name}</span><span class="badge wait" id="badge-${i}">Menunggu</span>`;
     fileList.appendChild(row);
   });
+
+  progressText.textContent = 'Menyiapkan mesin OCR (sekali saja, untuk semua file)...';
+  ocrWorker = await Tesseract.createWorker('ind+eng');
+
   for (let i = 0; i < files.length; i++) {
-    progressText.textContent = `Memproses file ${i+1} dari ${files.length}: ${files[i].name}`;
     document.getElementById('badge-'+i).textContent = 'Ekstraksi...';
     try {
-      const text = await extractText(files[i]);
-      document.getElementById('badge-'+i).textContent = 'Analisa AI...';
+      const text = await extractText(files[i], i);
+      document.getElementById('badge-'+i).textContent = 'Analisa + Riset AI...';
+      progressText.textContent = `File ${i+1}/${files.length}: mengirim ke AI untuk dianalisa...`;
       const data = await analyzeText(text);
       data._fileName = files[i].name;
       allResults.push(data);
@@ -79,14 +85,17 @@ processBtn.addEventListener('click', async () => {
       document.getElementById('badge-'+i).textContent = 'Gagal';
       document.getElementById('badge-'+i).className = 'badge err';
     }
-    if (i < files.length - 1) await new Promise(r => setTimeout(r, 3000));
+    if (i < files.length - 1) await new Promise(r => setTimeout(r, 5000));
   }
+
+  await ocrWorker.terminate();
   progressText.textContent = `Semua ${files.length} file selesai diproses.`;
   downloadCard.style.display = 'block';
   processBtn.disabled = false;
 });
 
-async function extractText(file) {
+async function extractText(file, fileIdx) {
+  const name = file.name.toLowerCase();
   if (file.type === 'application/pdf') {
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({data: buf}).promise;
@@ -95,19 +104,26 @@ async function extractText(file) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map(it => it.str).join(' ');
-      if (pageText.trim().length > 20) { fullText += pageText + '\n\n'; }
-      else {
-        const viewport = page.getViewport({scale: 2});
+      if (pageText.trim().length > 20) {
+        fullText += pageText + '\n\n';
+      } else {
+        progressText.textContent = `File ${fileIdx+1}: dokumen hasil SCAN terdeteksi — OCR halaman ${i} dari ${pdf.numPages}, mohon tunggu...`;
+        const viewport = page.getViewport({scale: 2.5});
         const canvas = document.createElement('canvas');
         canvas.width = viewport.width; canvas.height = viewport.height;
         await page.render({canvasContext: canvas.getContext('2d'), viewport}).promise;
-        const { data: { text } } = await Tesseract.recognize(canvas, 'ind+eng');
+        const { data: { text } } = await ocrWorker.recognize(canvas);
         fullText += text + '\n\n';
       }
     }
     return fullText.trim();
+  } else if (name.endsWith('.docx')) {
+    const buf = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({arrayBuffer: buf});
+    return result.value.trim();
   } else {
-    const { data: { text } } = await Tesseract.recognize(file, 'ind+eng');
+    progressText.textContent = `File ${fileIdx+1}: membaca gambar dengan OCR...`;
+    const { data: { text } } = await ocrWorker.recognize(file);
     return text.trim();
   }
 }
@@ -124,26 +140,32 @@ async function analyzeText(text) {
 
 downloadBtn.addEventListener('click', () => {
   const wb = XLSX.utils.book_new();
+
   const eko = [];
   allResults.forEach((d, idx) => {
     if (d._error) { eko.push({No: idx+1, 'Nama File': d._fileName, Error: d._error}); return; }
-    const mgmt = d.management && d.management.length ? d.management : [{}];
-    const sup = d.supplier && d.supplier.length ? d.supplier : [{}];
-    const buy = d.buyer && d.buyer.length ? d.buyer : [{}];
+    const id = d.identitas_debitur || {};
+    const mgmt = d.management?.length ? d.management : [{}];
+    const sup = d.supplier?.length ? d.supplier : [{}];
+    const buy = d.buyer?.length ? d.buyer : [{}];
     const maxLen = Math.max(mgmt.length, sup.length, buy.length, 1);
     for (let i = 0; i < maxLen; i++) {
       eko.push({
         No: i===0 ? idx+1 : '',
-        CIF: i===0 ? (d.cif||'') : '',
-        'Nama Debitur': i===0 ? (d.nama_debitur||'') : '',
+        CIF: i===0 ? (id.cif||'') : '',
+        'Nama Debitur': i===0 ? (id.nama_debitur||'') : '',
+        'NPWP': i===0 ? (id.npwp||'') : '',
+        'Alamat Kantor Pusat': i===0 ? (id.alamat_kantor_pusat||'') : '',
         'Regional Office': i===0 ? (d.regional_office||'') : '',
         'Total Plafon (Rp Juta)': i===0 ? (d.total_plafon_juta||'') : '',
         'Nama (Management)': mgmt[i]?.nama || '',
         'Jabatan': mgmt[i]?.jabatan || '',
         'Data Supplier': sup[i]?.nama_perusahaan || '',
         'Alamat Supplier': sup[i]?.alamat || '',
+        'Sumber (Supplier)': sup[i]?.sumber_data || '',
         'Data Buyer': buy[i]?.nama_perusahaan || '',
-        'Alamat Buyer': buy[i]?.alamat || ''
+        'Alamat Buyer': buy[i]?.alamat || '',
+        'Sumber (Buyer)': buy[i]?.sumber_data || ''
       });
     }
   });
@@ -152,13 +174,13 @@ downloadBtn.addEventListener('click', () => {
   const fbi = [];
   allResults.forEach((d, idx) => {
     if (d._error) return;
-    const fas = d.fasilitas_kredit && d.fasilitas_kredit.length ? d.fasilitas_kredit : [{}];
+    const id = d.identitas_debitur || {};
+    const fas = d.fasilitas_kredit?.length ? d.fasilitas_kredit : [{}];
     fas.forEach((f, i) => {
       fbi.push({
         No: i===0 ? idx+1 : '',
         'Regional Office': i===0 ? (d.regional_office||'') : '',
-        'CBC Office': i===0 ? (d.cbc_office||'') : '',
-        'Nama Debitur': i===0 ? (d.nama_debitur||'') : '',
+        'Nama Debitur': i===0 ? (id.nama_debitur||'') : '',
         'Fasilitas Pinjaman': f.jenis_fasilitas || '',
         'Status Pinjaman': f.status_pinjaman || '',
         'Tenor (Bulan)': f.tenor_bulan || '',
@@ -172,17 +194,31 @@ downloadBtn.addEventListener('click', () => {
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(fbi), 'Data Fasilitas');
 
-  const ai = allResults.map((d, idx) => d._error ? {No: idx+1, 'Nama File': d._fileName, Error: d._error} : {
-    No: idx+1,
-    'Nama Debitur': d.nama_debitur || '',
-    'Jenis Kredit Diajukan': d.jenis_kredit_diajukan || '',
-    'Kegunaan Kredit': d.kegunaan_kredit || '',
-    'Jangka Waktu Kredit': d.jangka_waktu_kredit || '',
-    'Deskripsi Bisnis': d.bisnis?.deskripsi || '',
-    'Model Bisnis': d.bisnis?.model_bisnis || '',
-    'Analisa & Catatan AI': d.analisa_ai || ''
+  const risk = allResults.map((d, idx) => {
+    if (d._error) return {No: idx+1, 'Nama File': d._fileName, Error: d._error};
+    const ag = d.agunan?.length ? d.agunan.map(a=>`${a.jenis||''} (Rp${a.nilai_juta||'-'} jt, ${a.lokasi||'-'})`).join('; ') : '';
+    const fin = d.analisa_keuangan || {};
+    const risiko = d.risiko_dan_legalitas || {};
+    return {
+      No: idx+1,
+      'Nama Debitur': d.identitas_debitur?.nama_debitur || '',
+      'Bentuk Badan Usaha': d.identitas_debitur?.bentuk_badan_usaha || '',
+      'Jenis Kredit Diajukan': d.jenis_kredit_diajukan || '',
+      'Kegunaan Kredit': d.kegunaan_kredit || '',
+      'Jangka Waktu Kredit': d.jangka_waktu_kredit || '',
+      'Model Bisnis': d.bisnis?.model_bisnis || '',
+      'Agunan': ag,
+      'Omzet (Rp Juta)': fin.omzet_juta || '',
+      'Laba Bersih (Rp Juta)': fin.laba_bersih_juta || '',
+      'DER': fin.der || '',
+      'Status Legalitas': risiko.legalitas_status || '',
+      'Group/Afiliasi': risiko.group_afiliasi || '',
+      'Red Flags': risiko.red_flags || '',
+      'Rekomendasi AI (Perlu Review Manusia)': d.rekomendasi_analis || '',
+      'Catatan Analisa AI': d.analisa_ai || ''
+    };
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ai), 'Analisa AI');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(risk), 'Analisa & Risiko AI');
 
   XLSX.writeFile(wb, 'Rekap_MABI_' + new Date().toISOString().slice(0,10) + '.xlsx');
 });
