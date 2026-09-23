@@ -32,7 +32,7 @@ Berikut teks dokumennya:
       }
     );
     const data = await response.json();
-    const result = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Tidak ada hasil dari Gemini.';
+    const result = data.candidates?.[0]?.content?.parts?.[0]?.text || ('DEBUG ERROR: ' + JSON.stringify(data));
     res.status(200).json({ result });
   } catch (err) {
     res.status(500).json({ error: err.message });
