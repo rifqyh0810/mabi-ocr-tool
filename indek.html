@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>MABI Auto Analyzer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
+  <style>
+    body { font-family: Arial; max-width: 700px; margin: 30px auto; padding: 0 15px; }
+    button { padding: 10px 18px; margin: 8px 4px 8px 0; cursor: pointer; font-size: 15px; }
+    textarea { width: 100%; height: 200px; margin-top: 10px; }
+    #status { color: #0066cc; font-weight: bold; }
+    #result { white-space: pre-wrap; background: #f5f5f5; padding: 15px; border-radius: 8px; margin-top: 15px; }
+  </style>
+</head>
+<body>
+  <h2>📄 MABI Auto Analyzer</h2>
+  <p>Upload dokumen → tunggu → klik 1 tombol → hasil analisa langsung muncul.</p>
+  <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png">
+  <p id="status"></p>
+  <textarea id="output" placeholder="Hasil teks akan muncul di sini..."></textarea><br>
+  <button id="analyzeBtn">🤖 Analisa dengan AI</button>
+  <div id="result"></div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const fileInput = document.getElementById('fileInput');
+    const statusEl = document.getElementById('status');
+    const output = document.getElementById('output');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const resultEl = document.getElementById('result');
+
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      output.value = ''; resultEl.textContent = '';
+      statusEl.textContent = 'Memproses, mohon tunggu...';
+      if (file.type === 'application/pdf') { await processPDF(file); }
+      else { await processImage(file); }
+      statusEl.textContent = 'Ekstraksi teks selesai! Klik tombol Analisa.';
+    });
+
+    async function processPDF(file) {
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+      let fullText = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        statusEl.textContent = `Memproses halaman ${i} dari ${pdf.numPages}...`;
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(it => it.str).join(' ');
+        if (pageText.trim().length > 20) { fullText += pageText + '\n\n'; }
+        else {
+          const viewport = page.getViewport({scale: 2});
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width; canvas.height = viewport.height;
+          await page.render({canvasContext: canvas.getContext('2d'), viewport}).promise;
+          const { data: { text } } = await Tesseract.recognize(canvas, 'ind+eng');
+          fullText += text + '\n\n';
+        }
+      }
+      output.value = fullText.trim();
+    }
+
+    async function processImage(file) {
+      statusEl.textContent = 'Membaca gambar dengan OCR...';
+      const { data: { text } } = await Tesseract.recognize(file, 'ind+eng');
+      output.value = text.trim();
+    }
+
+    analyzeBtn.addEventListener('click', async () => {
+      if (!output.value.trim()) { statusEl.textContent = 'Belum ada teks untuk dianalisa.'; return; }
+      statusEl.textContent = 'Mengirim ke AI, mohon tunggu (10-30 detik)...';
+      resultEl.textContent = '';
+      try {
+        const res = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: output.value })
+        });
+        const data = await res.json();
+        resultEl.textContent = data.result || data.error || 'Tidak ada respon.';
+        statusEl.textContent = 'Selesai!';
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>
