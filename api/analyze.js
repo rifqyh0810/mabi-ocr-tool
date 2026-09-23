@@ -5,7 +5,7 @@ export default async function handler(req, res) {
 
   const prompt = `Kamu adalah analis kredit bank profesional. Baca dokumen Memorandum Analisa Bisnis (MAB) di bawah, ekstrak ke JSON sesuai skema berikut.
 
-Untuk data yang TIDAK ADA di dokumen (terutama alamat kantor supplier/buyer/debitur), gunakan Google Search untuk mencari informasi publik resmi perusahaan tersebut (situs resmi, direktori bisnis). Tandai field "sumber_data" dengan "Dokumen" jika dari teks dokumen, atau "Internet - perlu verifikasi" jika hasil pencarian.
+Untuk data yang TIDAK ADA di dokumen (terutama alamat kantor supplier/buyer/debitur), gunakan Google Search untuk mencari informasi publik resmi perusahaan tersebut (situs resmi, direktori bisnis). Tandai field    "sumber_data" dengan "Dokumen" jika dari teks dokumen. Untuk data yang tidak ada di dokumen, JANGAN mengarang — isi "" (kosong) dan biarkan field sumber_data kosong juga. Lebih baik kosong daripada salah.
 
 Skema JSON (isi "" jika benar-benar tidak ditemukan dari dokumen maupun internet):
 {
